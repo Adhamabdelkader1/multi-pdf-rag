@@ -1,8 +1,8 @@
 streamlit
-langchain
-langchain-community
+langchain-core
 langchain-cohere
-langchain-chroma
 langchain-text-splitters
 chromadb
-pypdf
+pymupdf
+sentence-transformers
+torch
