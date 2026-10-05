@@ -3,50 +3,57 @@ from sentence_transformers import SentenceTransformer
 
 
 MODEL_NAME = "all-MiniLM-L6-v2"
-COLLECTION_NAME = "multi_pdf_rag"
+CHROMA_PATH = "chroma_db"
 
 _model = None
 
 
 def get_embedding_model():
     global _model
+
     if _model is None:
         _model = SentenceTransformer(MODEL_NAME)
+
     return _model
 
 
-def create_vectorstore(chunks):
+def create_vectorstore(chunks, collection_name):
+    """Create a persistent Chroma collection using local embeddings."""
     model = get_embedding_model()
-    client = chromadb.Client()
+
+    client = chromadb.PersistentClient(path=CHROMA_PATH)
 
     collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
+        name=collection_name,
         metadata={"hnsw:space": "cosine"},
     )
 
-    texts = [chunk.page_content for chunk in chunks]
-    embeddings = model.encode(
-        texts,
-        normalize_embeddings=True,
-        show_progress_bar=False,
-    ).tolist()
+    # Avoid adding the same chunk twice if the collection already exists.
+    if collection.count() == 0:
+        texts = [chunk.page_content for chunk in chunks]
 
-    ids = [f"chunk-{i}" for i in range(len(chunks))]
+        embeddings = model.encode(
+            texts,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        ).tolist()
 
-    metadatas = [
-        {
-            "source": chunk.metadata.get("source", "Unknown"),
-            "page": int(chunk.metadata.get("page", 1)),
-        }
-        for chunk in chunks
-    ]
+        ids = [f"chunk-{i}" for i in range(len(chunks))]
 
-    collection.add(
-        ids=ids,
-        documents=texts,
-        embeddings=embeddings,
-        metadatas=metadatas,
-    )
+        metadatas = [
+            {
+                "source": chunk.metadata.get("source", "Unknown"),
+                "page": int(chunk.metadata.get("page", 1)),
+            }
+            for chunk in chunks
+        ]
+
+        collection.add(
+            ids=ids,
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+        )
 
     return collection
 
@@ -67,6 +74,7 @@ def search_documents(
     )[0].tolist()
 
     where = None
+
     if selected_sources:
         where = (
             {"source": selected_sources[0]}
@@ -76,12 +84,15 @@ def search_documents(
 
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=k,
+        n_results=min(k, collection.count()),
         where=where,
         include=["documents", "metadatas", "distances"],
     )
 
     documents = []
+
+    if not results["documents"]:
+        return documents
 
     for text, metadata, distance in zip(
         results["documents"][0],
